@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'dart:convert';
 import 'package:flutter/services.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
+import 'package:shared_preferences/shared_preferences.dart'; // NAYA PACKAGE
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -43,19 +44,18 @@ class _GameBoardState extends State<GameBoard> {
   bool gameOver = false;
   int currentLevelIndex = 0;
   bool isLoading = true;
-
   int diamonds = 0;
 
   List<GameLevel> levels = [];
   late List<List<int>> playerState;
 
-  // AD VARIABLES
   BannerAd? _bannerAd;
   bool _isBannerAdLoaded = false;
   RewardedAd? _rewardedAd;
-
-  // NAYA: Full Screen (Interstitial) Ad Variable
   InterstitialAd? _interstitialAd;
+
+  String tutorialMessage =
+      "Welcome! 🐫 Tap any empty box to place your first camel.";
 
   final List<Color> regionColors = [
     Colors.blue.shade200,
@@ -70,13 +70,33 @@ class _GameBoardState extends State<GameBoard> {
   @override
   void initState() {
     super.initState();
-    _loadLevelsData();
-    _loadBannerAd();
-    _loadRewardedAd();
-    _loadInterstitialAd(); // NAYA: Full screen ad load karna
+    _initializeApp();
   }
 
-  // --- AD LOADING FUNCTIONS ---
+  // NAYA: Shuru mein data load karne ka setup
+  Future<void> _initializeApp() async {
+    await _loadGameData(); // Pehle saved data lao
+    await _loadLevelsData(); // Phir JSON se levels lao
+    _loadBannerAd();
+    _loadRewardedAd();
+    _loadInterstitialAd();
+  }
+
+  // NAYA: Data Load karne ka function
+  Future<void> _loadGameData() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      currentLevelIndex = prefs.getInt('saved_level') ?? 0;
+      diamonds = prefs.getInt('saved_diamonds') ?? 0;
+    });
+  }
+
+  // NAYA: Data Save karne ka function
+  Future<void> _saveGameData() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('saved_level', currentLevelIndex);
+    await prefs.setInt('saved_diamonds', diamonds);
+  }
 
   void _loadBannerAd() {
     _bannerAd = BannerAd(
@@ -111,8 +131,7 @@ class _GameBoardState extends State<GameBoard> {
 
   void _loadInterstitialAd() {
     InterstitialAd.load(
-      adUnitId:
-          'ca-app-pub-3940256099942544/1033173712', // Test Interstitial ID
+      adUnitId: 'ca-app-pub-3940256099942544/1033173712',
       request: const AdRequest(),
       adLoadCallback: InterstitialAdLoadCallback(
         onAdLoaded: (ad) {
@@ -124,8 +143,6 @@ class _GameBoardState extends State<GameBoard> {
       ),
     );
   }
-
-  // --- AD SHOWING FUNCTIONS ---
 
   void _showRewardedAd() {
     if (_rewardedAd != null) {
@@ -148,31 +165,30 @@ class _GameBoardState extends State<GameBoard> {
     }
   }
 
-  // NAYA: Logic check karne ke liye ki Ad dikhana hai ya seedha next level
   void _goToNextLevelWithAdCheck() {
-    // Har 3 level ke baad ad dikhao (currentLevelIndex 0 se start hota hai, toh 2, 5, 8 par aayega)
     if ((currentLevelIndex + 1) % 3 == 0 && _interstitialAd != null) {
       _interstitialAd!.fullScreenContentCallback = FullScreenContentCallback(
         onAdDismissedFullScreenContent: (ad) {
           ad.dispose();
-          _loadInterstitialAd(); // Agle 3 level ke liye naya ad load karo
-          _startNextLevel(); // Ad band hone ke baad next level par jao
+          _loadInterstitialAd();
+          _startNextLevel();
         },
         onAdFailedToShowFullScreenContent: (ad, err) {
           ad.dispose();
           _loadInterstitialAd();
-          _startNextLevel(); // Error aane par seedha next level par jao
+          _startNextLevel();
         },
       );
       _interstitialAd!.show();
     } else {
-      _startNextLevel(); // Agar 3rd level nahi hai, toh seedha jao
+      _startNextLevel();
     }
   }
 
   void _startNextLevel() {
     setState(() {
       currentLevelIndex++;
+      _saveGameData(); // NAYA: Level badhte hi save karo
       _loadLevel();
     });
   }
@@ -181,11 +197,9 @@ class _GameBoardState extends State<GameBoard> {
   void dispose() {
     _bannerAd?.dispose();
     _rewardedAd?.dispose();
-    _interstitialAd?.dispose(); // NAYA: Clean up
+    _interstitialAd?.dispose();
     super.dispose();
   }
-
-  // --- GAME LOGIC FUNCTIONS ---
 
   Future<void> _loadLevelsData() async {
     try {
@@ -220,7 +234,21 @@ class _GameBoardState extends State<GameBoard> {
       playerState = List.generate(n, (_) => List.filled(n, 0));
       lives = 3;
       gameOver = false;
+      if (currentLevelIndex == 0) {
+        tutorialMessage =
+            "Welcome! 🐫 Tap any empty box to place your first camel.";
+      }
     });
+  }
+
+  int _countPlacedCamels() {
+    int count = 0;
+    for (var row in playerState) {
+      for (var cell in row) {
+        if (cell == 1) count++;
+      }
+    }
+    return count;
   }
 
   void _handleTap(int row, int col) {
@@ -231,10 +259,33 @@ class _GameBoardState extends State<GameBoard> {
       } else if (playerState[row][col] == 2) {
         if (levels[currentLevelIndex].solution[row][col]) {
           playerState[row][col] = 1;
+
+          if (currentLevelIndex == 0) {
+            int totalCamels = _countPlacedCamels();
+            if (totalCamels == 1) {
+              tutorialMessage =
+                  "Awesome! 🌟 Rule 1: Only ONE camel allowed per color region!";
+            } else if (totalCamels == 2) {
+              tutorialMessage =
+                  "Great! 🛑 Rule 2: Camels CANNOT touch each other, not even diagonally.";
+            } else if (totalCamels == 3) {
+              tutorialMessage =
+                  "You're a natural! 🔥 Rule 3: Only 1 camel per Row & Column.";
+            } else {
+              tutorialMessage = "Keep going! Fill the board! 🧠";
+            }
+          }
+
           _checkWinCondition();
         } else {
           lives--;
           playerState[row][col] = 0;
+
+          if (currentLevelIndex == 0) {
+            tutorialMessage =
+                "Oops! ❌ That breaks a rule. Try a different spot.";
+          }
+
           if (lives <= 0) {
             gameOver = true;
             _showDialog("Game Over", "The camels died of thirst! 🐪💀", false);
@@ -248,17 +299,14 @@ class _GameBoardState extends State<GameBoard> {
 
   void _checkWinCondition() {
     int n = levels[currentLevelIndex].size;
-    int camelsPlaced = 0;
-    for (int r = 0; r < n; r++) {
-      for (int c = 0; c < n; c++) {
-        if (playerState[r][c] == 1) camelsPlaced++;
-      }
-    }
+    int camelsPlaced = _countPlacedCamels();
+
     if (camelsPlaced == n) {
       gameOver = true;
       setState(() {
         diamonds += 7;
       });
+      _saveGameData(); // NAYA: Diamonds badhne par turant save karo
 
       if (currentLevelIndex < levels.length - 1) {
         _showDialog(
@@ -327,6 +375,7 @@ class _GameBoardState extends State<GameBoard> {
                         lives = 1;
                         gameOver = false;
                       });
+                      _saveGameData(); // NAYA: Diamonds cut hone par save karo
                     },
                     child: const Text(
                       "💎 Pay 20 for +1 Life",
@@ -341,8 +390,8 @@ class _GameBoardState extends State<GameBoard> {
             if (hasNextLevel && lives > 0)
               TextButton(
                 onPressed: () {
-                  Navigator.of(context).pop(); // Dialog band karega
-                  _goToNextLevelWithAdCheck(); // NAYA: Yahan Ad check hoga
+                  Navigator.of(context).pop();
+                  _goToNextLevelWithAdCheck();
                 },
                 child: const Text("Next Level ➡️"),
               ),
@@ -352,6 +401,7 @@ class _GameBoardState extends State<GameBoard> {
                   Navigator.of(context).pop();
                   setState(() {
                     currentLevelIndex = 0;
+                    _saveGameData(); // NAYA: Reset hone par save karo
                     _loadLevel();
                   });
                 },
@@ -381,8 +431,6 @@ class _GameBoardState extends State<GameBoard> {
       ),
     );
   }
-
-  // --- UI BUILDING ---
 
   @override
   Widget build(BuildContext context) {
@@ -434,21 +482,50 @@ class _GameBoardState extends State<GameBoard> {
         ),
         body: Column(
           children: [
-            Padding(
-              padding: const EdgeInsets.all(12.0),
-              child: Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                alignment: WrapAlignment.center,
-                children: [
-                  _buildRuleCard("🐫 1 per color"),
-                  _buildRuleCard("🐫 1 per row & col"),
-                  _buildRuleCard("🛑 Camels cannot touch"),
-                ],
+            if (currentLevelIndex == 0)
+              Container(
+                width: double.infinity,
+                margin: const EdgeInsets.all(12),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade100.withOpacity(0.9),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.blue.shade400, width: 2),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.school, color: Colors.blue, size: 30),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        tutorialMessage,
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.black87,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
 
-            const SizedBox(height: 16),
+            if (currentLevelIndex != 0)
+              Padding(
+                padding: const EdgeInsets.all(12.0),
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  alignment: WrapAlignment.center,
+                  children: [
+                    _buildRuleCard("🐫 1 per color"),
+                    _buildRuleCard("🐫 1 per row & col"),
+                    _buildRuleCard("🛑 Camels cannot touch"),
+                  ],
+                ),
+              ),
+
+            const SizedBox(height: 10),
 
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
