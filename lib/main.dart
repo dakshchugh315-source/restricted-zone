@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'dart:convert';
 import 'package:flutter/services.dart';
+import 'package:google_mobile_ads/google_mobile_ads.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await MobileAds.instance.initialize();
   runApp(const MeowdokuApp());
 }
 
@@ -26,13 +29,11 @@ class GameLevel {
   final int size;
   final List<List<int>> regions;
   final List<List<bool>> solution;
-
   GameLevel(this.size, this.regions, this.solution);
 }
 
 class GameBoard extends StatefulWidget {
   const GameBoard({super.key});
-
   @override
   State<GameBoard> createState() => _GameBoardState();
 }
@@ -43,8 +44,18 @@ class _GameBoardState extends State<GameBoard> {
   int currentLevelIndex = 0;
   bool isLoading = true;
 
+  int diamonds = 0;
+
   List<GameLevel> levels = [];
   late List<List<int>> playerState;
+
+  // AD VARIABLES
+  BannerAd? _bannerAd;
+  bool _isBannerAdLoaded = false;
+  RewardedAd? _rewardedAd;
+
+  // NAYA: Full Screen (Interstitial) Ad Variable
+  InterstitialAd? _interstitialAd;
 
   final List<Color> regionColors = [
     Colors.blue.shade200,
@@ -60,7 +71,121 @@ class _GameBoardState extends State<GameBoard> {
   void initState() {
     super.initState();
     _loadLevelsData();
+    _loadBannerAd();
+    _loadRewardedAd();
+    _loadInterstitialAd(); // NAYA: Full screen ad load karna
   }
+
+  // --- AD LOADING FUNCTIONS ---
+
+  void _loadBannerAd() {
+    _bannerAd = BannerAd(
+      adUnitId: 'ca-app-pub-3940256099942544/6300978111',
+      request: const AdRequest(),
+      size: AdSize.banner,
+      listener: BannerAdListener(
+        onAdLoaded: (ad) {
+          setState(() {
+            _isBannerAdLoaded = true;
+          });
+        },
+        onAdFailedToLoad: (ad, err) {
+          ad.dispose();
+        },
+      ),
+    )..load();
+  }
+
+  void _loadRewardedAd() {
+    RewardedAd.load(
+      adUnitId: 'ca-app-pub-3940256099942544/5224354917',
+      request: const AdRequest(),
+      rewardedAdLoadCallback: RewardedAdLoadCallback(
+        onAdLoaded: (ad) {
+          _rewardedAd = ad;
+        },
+        onAdFailedToLoad: (err) {},
+      ),
+    );
+  }
+
+  void _loadInterstitialAd() {
+    InterstitialAd.load(
+      adUnitId:
+          'ca-app-pub-3940256099942544/1033173712', // Test Interstitial ID
+      request: const AdRequest(),
+      adLoadCallback: InterstitialAdLoadCallback(
+        onAdLoaded: (ad) {
+          _interstitialAd = ad;
+        },
+        onAdFailedToLoad: (err) {
+          print('Interstitial Failed: ${err.message}');
+        },
+      ),
+    );
+  }
+
+  // --- AD SHOWING FUNCTIONS ---
+
+  void _showRewardedAd() {
+    if (_rewardedAd != null) {
+      _rewardedAd!.show(
+        onUserEarnedReward: (AdWithoutView ad, RewardItem reward) {
+          setState(() {
+            lives = 1;
+            gameOver = false;
+          });
+        },
+      );
+      _rewardedAd = null;
+      _loadRewardedAd();
+    } else {
+      setState(() {
+        lives = 1;
+        gameOver = false;
+      });
+      _loadRewardedAd();
+    }
+  }
+
+  // NAYA: Logic check karne ke liye ki Ad dikhana hai ya seedha next level
+  void _goToNextLevelWithAdCheck() {
+    // Har 3 level ke baad ad dikhao (currentLevelIndex 0 se start hota hai, toh 2, 5, 8 par aayega)
+    if ((currentLevelIndex + 1) % 3 == 0 && _interstitialAd != null) {
+      _interstitialAd!.fullScreenContentCallback = FullScreenContentCallback(
+        onAdDismissedFullScreenContent: (ad) {
+          ad.dispose();
+          _loadInterstitialAd(); // Agle 3 level ke liye naya ad load karo
+          _startNextLevel(); // Ad band hone ke baad next level par jao
+        },
+        onAdFailedToShowFullScreenContent: (ad, err) {
+          ad.dispose();
+          _loadInterstitialAd();
+          _startNextLevel(); // Error aane par seedha next level par jao
+        },
+      );
+      _interstitialAd!.show();
+    } else {
+      _startNextLevel(); // Agar 3rd level nahi hai, toh seedha jao
+    }
+  }
+
+  void _startNextLevel() {
+    setState(() {
+      currentLevelIndex++;
+      _loadLevel();
+    });
+  }
+
+  @override
+  void dispose() {
+    _bannerAd?.dispose();
+    _rewardedAd?.dispose();
+    _interstitialAd?.dispose(); // NAYA: Clean up
+    super.dispose();
+  }
+
+  // --- GAME LOGIC FUNCTIONS ---
 
   Future<void> _loadLevelsData() async {
     try {
@@ -68,7 +193,6 @@ class _GameBoardState extends State<GameBoard> {
         'assets/levels.json',
       );
       final List<dynamic> jsonResponse = json.decode(jsonString);
-
       setState(() {
         levels = jsonResponse.map((level) {
           return GameLevel(
@@ -81,7 +205,6 @@ class _GameBoardState extends State<GameBoard> {
                 .toList(),
           );
         }).toList();
-
         isLoading = false;
         _loadLevel();
       });
@@ -102,26 +225,23 @@ class _GameBoardState extends State<GameBoard> {
 
   void _handleTap(int row, int col) {
     if (gameOver || isLoading) return;
-
     setState(() {
       if (playerState[row][col] == 0) {
-        playerState[row][col] = 2; // Cross
+        playerState[row][col] = 2;
       } else if (playerState[row][col] == 2) {
-        // Try placing Camel
         if (levels[currentLevelIndex].solution[row][col]) {
           playerState[row][col] = 1;
           _checkWinCondition();
         } else {
           lives--;
           playerState[row][col] = 0;
-
           if (lives <= 0) {
             gameOver = true;
             _showDialog("Game Over", "The camels died of thirst! 🐪💀", false);
           }
         }
       } else if (playerState[row][col] == 1) {
-        playerState[row][col] = 0; // Remove Camel
+        playerState[row][col] = 0;
       }
     });
   }
@@ -136,14 +256,22 @@ class _GameBoardState extends State<GameBoard> {
     }
     if (camelsPlaced == n) {
       gameOver = true;
+      setState(() {
+        diamonds += 7;
+      });
+
       if (currentLevelIndex < levels.length - 1) {
         _showDialog(
-          "Level Cleared!",
-          "Big brain energy. Ready for the next one?",
+          "Level Cleared! 🎉",
+          "You earned 7 💎! Ready for the next one?",
           true,
         );
       } else {
-        _showDialog("You Win!", "You beat all levels! 🐫👑", false);
+        _showDialog(
+          "You Win! 🏆",
+          "You beat all levels and earned 7 💎! 🐫👑",
+          false,
+        );
       }
     }
   }
@@ -160,22 +288,61 @@ class _GameBoardState extends State<GameBoard> {
           ),
           content: Text(message, style: const TextStyle(fontSize: 16)),
           actions: [
-            if (!hasNextLevel && lives <= 0)
+            if (lives <= 0) ...[
               TextButton(
                 onPressed: () {
                   Navigator.of(context).pop();
-                  _loadLevel(); // Retry current level
+                  _loadLevel();
                 },
-                child: const Text("Retry Level"),
+                child: const Text(
+                  "Restart Level",
+                  style: TextStyle(color: Colors.red),
+                ),
               ),
-            if (hasNextLevel)
-              TextButton(
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.amber),
                 onPressed: () {
                   Navigator.of(context).pop();
-                  setState(() {
-                    currentLevelIndex++;
-                    _loadLevel();
-                  });
+                  _showRewardedAd();
+                },
+                child: const Text(
+                  "📺 Watch Ad (+1 Life)",
+                  style: TextStyle(
+                    color: Colors.black,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              if (diamonds >= 20)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8.0),
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.blueAccent,
+                    ),
+                    onPressed: () {
+                      Navigator.of(context).pop();
+                      setState(() {
+                        diamonds -= 20;
+                        lives = 1;
+                        gameOver = false;
+                      });
+                    },
+                    child: const Text(
+                      "💎 Pay 20 for +1 Life",
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+            if (hasNextLevel && lives > 0)
+              TextButton(
+                onPressed: () {
+                  Navigator.of(context).pop(); // Dialog band karega
+                  _goToNextLevelWithAdCheck(); // NAYA: Yahan Ad check hoga
                 },
                 child: const Text("Next Level ➡️"),
               ),
@@ -184,7 +351,7 @@ class _GameBoardState extends State<GameBoard> {
                 onPressed: () {
                   Navigator.of(context).pop();
                   setState(() {
-                    currentLevelIndex = 0; // Back to start
+                    currentLevelIndex = 0;
                     _loadLevel();
                   });
                 },
@@ -198,7 +365,7 @@ class _GameBoardState extends State<GameBoard> {
 
   Widget _buildRuleCard(String text) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
@@ -207,13 +374,15 @@ class _GameBoardState extends State<GameBoard> {
       child: Text(
         text,
         style: TextStyle(
-          fontSize: 12,
+          fontSize: 15,
           color: Colors.grey.shade800,
           fontWeight: FontWeight.bold,
         ),
       ),
     );
   }
+
+  // --- UI BUILDING ---
 
   @override
   Widget build(BuildContext context) {
@@ -229,8 +398,8 @@ class _GameBoardState extends State<GameBoard> {
     return Container(
       decoration: const BoxDecoration(
         image: DecorationImage(
-          image: AssetImage('assets/desert.jpg'), // Teri image ka path
-          fit: BoxFit.cover, // Poori screen par failane ke liye
+          image: AssetImage('assets/desert.jpg'),
+          fit: BoxFit.cover,
         ),
       ),
       child: Scaffold(
@@ -244,6 +413,19 @@ class _GameBoardState extends State<GameBoard> {
           backgroundColor: Colors.amber.shade400.withOpacity(0.85),
           elevation: 0,
           actions: [
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                child: Text(
+                  '💎 $diamonds',
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.black87,
+                  ),
+                ),
+              ),
+            ),
             IconButton(
               icon: const Icon(Icons.refresh),
               onPressed: _loadLevelsData,
@@ -266,23 +448,25 @@ class _GameBoardState extends State<GameBoard> {
               ),
             ),
 
+            const SizedBox(height: 16),
+
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: List.generate(3, (index) {
                 return Icon(
                   index < lives ? Icons.favorite : Icons.favorite_border,
                   color: Colors.red,
-                  size: 32,
+                  size: 42,
                 );
               }),
             ),
 
-            const SizedBox(height: 10),
+            const SizedBox(height: 16),
 
             Expanded(
               child: Center(
                 child: Padding(
-                  padding: const EdgeInsets.all(16.0),
+                  padding: const EdgeInsets.symmetric(horizontal: 6.0),
                   child: AspectRatio(
                     aspectRatio: 1,
                     child: GridView.builder(
@@ -317,7 +501,7 @@ class _GameBoardState extends State<GameBoard> {
                             child: Center(
                               child: Text(
                                 cellContent,
-                                style: const TextStyle(fontSize: 32),
+                                style: const TextStyle(fontSize: 34),
                               ),
                             ),
                           ),
@@ -329,7 +513,14 @@ class _GameBoardState extends State<GameBoard> {
               ),
             ),
 
-            const SizedBox(height: 20),
+            if (_isBannerAdLoaded)
+              SizedBox(
+                height: _bannerAd!.size.height.toDouble(),
+                width: _bannerAd!.size.width.toDouble(),
+                child: AdWidget(ad: _bannerAd!),
+              )
+            else
+              const SizedBox(height: 50),
           ],
         ),
       ),
