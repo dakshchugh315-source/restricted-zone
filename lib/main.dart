@@ -1,6 +1,6 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart'; // For rootBundle (loading JSON)
+import 'dart:convert';
+import 'package:flutter/services.dart';
 
 void main() {
   runApp(const MeowdokuApp());
@@ -22,30 +22,12 @@ class MeowdokuApp extends StatelessWidget {
   }
 }
 
-// --- LEVEL DATA STRUCTURE ---
 class GameLevel {
   final int size;
   final List<List<int>> regions;
   final List<List<bool>> solution;
 
   GameLevel(this.size, this.regions, this.solution);
-
-  // JSON se parse karne ke liye Factory method
-  factory GameLevel.fromJson(Map<String, dynamic> json) {
-    int size = json['size'];
-
-    // Parse Regions
-    var regions = (json['regions'] as List)
-        .map((row) => (row as List).map((e) => e as int).toList())
-        .toList();
-
-    // Parse Solution
-    var solution = (json['solution'] as List)
-        .map((row) => (row as List).map((e) => e as bool).toList())
-        .toList();
-
-    return GameLevel(size, regions, solution);
-  }
 }
 
 class GameBoard extends StatefulWidget {
@@ -59,12 +41,11 @@ class _GameBoardState extends State<GameBoard> {
   int lives = 3;
   bool gameOver = false;
   int currentLevelIndex = 0;
-  bool isLoading = true; // Loading state flag
+  bool isLoading = true;
 
-  List<GameLevel> levels = []; // Ab ye khali rahegi, JSON se bharegi
+  List<GameLevel> levels = [];
   late List<List<int>> playerState;
 
-  // Added extra colors in case bigger levels have more regions
   final List<Color> regionColors = [
     Colors.blue.shade200,
     Colors.green.shade200,
@@ -72,9 +53,7 @@ class _GameBoardState extends State<GameBoard> {
     Colors.purple.shade200,
     Colors.pink.shade200,
     Colors.teal.shade200,
-    Colors.yellow.shade400,
-    Colors.cyan.shade200,
-    Colors.indigo.shade200,
+    Colors.red.shade200,
   ];
 
   @override
@@ -83,27 +62,36 @@ class _GameBoardState extends State<GameBoard> {
     _loadLevelsData();
   }
 
-  // --- JSON LOADING LOGIC ---
   Future<void> _loadLevelsData() async {
     try {
-      // JSON file ko assets se read karna
-      final String response = await rootBundle.loadString('assets/level.json');
-      final List<dynamic> data = json.decode(response);
+      final String jsonString = await rootBundle.loadString(
+        'assets/levels.json',
+      );
+      final List<dynamic> jsonResponse = json.decode(jsonString);
 
       setState(() {
-        // Data ko GameLevel objects mein convert karna
-        levels = data.map((json) => GameLevel.fromJson(json)).toList();
+        levels = jsonResponse.map((level) {
+          return GameLevel(
+            level['size'] as int,
+            (level['regions'] as List)
+                .map((row) => List<int>.from(row))
+                .toList(),
+            (level['solution'] as List)
+                .map((row) => List<bool>.from(row))
+                .toList(),
+          );
+        }).toList();
+
         isLoading = false;
-        _loadLevel(); // Pehla level start karo
+        _loadLevel();
       });
     } catch (e) {
-      print("Error loading levels: $e");
+      print("Error loading JSON: $e");
     }
   }
 
   void _loadLevel() {
     if (levels.isEmpty) return;
-    
     int n = levels[currentLevelIndex].size;
     setState(() {
       playerState = List.generate(n, (_) => List.filled(n, 0));
@@ -113,7 +101,7 @@ class _GameBoardState extends State<GameBoard> {
   }
 
   void _handleTap(int row, int col) {
-    if (gameOver) return;
+    if (gameOver || isLoading) return;
 
     setState(() {
       if (playerState[row][col] == 0) {
@@ -150,7 +138,10 @@ class _GameBoardState extends State<GameBoard> {
       gameOver = true;
       if (currentLevelIndex < levels.length - 1) {
         _showDialog(
-            "Level Cleared!", "Big brain energy. Ready for the next one?", true);
+          "Level Cleared!",
+          "Big brain energy. Ready for the next one?",
+          true,
+        );
       } else {
         _showDialog("You Win!", "You beat all levels! 🐫👑", false);
       }
@@ -163,8 +154,10 @@ class _GameBoardState extends State<GameBoard> {
       barrierDismissible: false,
       builder: (BuildContext context) {
         return AlertDialog(
-          title:
-              Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
+          title: Text(
+            title,
+            style: const TextStyle(fontWeight: FontWeight.bold),
+          ),
           content: Text(message, style: const TextStyle(fontSize: 16)),
           actions: [
             if (!hasNextLevel && lives <= 0)
@@ -205,162 +198,139 @@ class _GameBoardState extends State<GameBoard> {
 
   Widget _buildRuleCard(String text) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.85), // Thoda transparent desert vibe
+        color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.brown.shade300, width: 2),
+        border: Border.all(color: Colors.grey.shade300),
       ),
       child: Text(
         text,
         style: TextStyle(
-            fontSize: 13,
-            color: Colors.brown.shade900,
-            fontWeight: FontWeight.bold),
+          fontSize: 12,
+          color: Colors.grey.shade800,
+          fontWeight: FontWeight.bold,
+        ),
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    // Agar data fetch ho raha hai, toh loader show karo
     if (isLoading) {
       return const Scaffold(
-        backgroundColor: Colors.amber,
-        body: Center(
-          child: CircularProgressIndicator(color: Colors.white),
-        ),
+        body: Center(child: CircularProgressIndicator(color: Colors.amber)),
       );
     }
 
     int n = levels[currentLevelIndex].size;
     var currentLevelData = levels[currentLevelIndex];
 
-    return Scaffold(
-      extendBodyBehindAppBar: true, // Transparent AppBar ke peeche background jaane do
-      appBar: AppBar(
-        title: Text('Level ${currentLevelIndex + 1}',
-            style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
-        centerTitle: true,
-        backgroundColor: Colors.black.withOpacity(0.4), // Semi-transparent AppBar
-        elevation: 0,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh, color: Colors.white),
-            onPressed: _loadLevel,
-          )
-        ],
-      ),
-      // --- DESERT BACKGROUND THEME ---
-      body: Container(
-        decoration: const BoxDecoration(
-          image: DecorationImage(
-            image: AssetImage('assets/desert.jpg'), // Yahan image add ho gayi
-            fit: BoxFit.cover,
-            colorFilter: ColorFilter.mode(
-              Colors.black26, // Background ko slight dark kiya hai taaki board clear dikhe
-              BlendMode.darken,
-            ),
-          ),
+    return Container(
+      decoration: const BoxDecoration(
+        image: DecorationImage(
+          image: AssetImage('assets/desert.jpg'), // Teri image ka path
+          fit: BoxFit.cover, // Poori screen par failane ke liye
         ),
-        child: SafeArea(
-          child: Column(
-            children: [
-              // THE RULES UI
-              Padding(
-                padding: const EdgeInsets.all(12.0),
-                child: Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  alignment: WrapAlignment.center,
-                  children: [
-                    _buildRuleCard("🐫 1 per color"),
-                    _buildRuleCard("🐫 1 per row & col"),
-                    _buildRuleCard("🛑 No touching"),
-                  ],
-                ),
+      ),
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        appBar: AppBar(
+          title: Text(
+            'Level ${currentLevelIndex + 1}',
+            style: const TextStyle(fontWeight: FontWeight.bold),
+          ),
+          centerTitle: true,
+          backgroundColor: Colors.amber.shade400.withOpacity(0.85),
+          elevation: 0,
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.refresh),
+              onPressed: _loadLevelsData,
+            ),
+          ],
+        ),
+        body: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(12.0),
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                alignment: WrapAlignment.center,
+                children: [
+                  _buildRuleCard("🐫 1 per color"),
+                  _buildRuleCard("🐫 1 per row & col"),
+                  _buildRuleCard("🛑 Camels cannot touch"),
+                ],
               ),
+            ),
 
-              // LIVES COUNTER
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: List.generate(3, (index) {
-                  return Icon(
-                    index < lives ? Icons.favorite : Icons.favorite_border,
-                    color: Colors.redAccent,
-                    size: 32,
-                    shadows: const [
-                      Shadow(color: Colors.black45, blurRadius: 4)
-                    ],
-                  );
-                }),
-              ),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: List.generate(3, (index) {
+                return Icon(
+                  index < lives ? Icons.favorite : Icons.favorite_border,
+                  color: Colors.red,
+                  size: 32,
+                );
+              }),
+            ),
 
-              const SizedBox(height: 10),
+            const SizedBox(height: 10),
 
-              // THE BOARD
-              Expanded(
-                child: Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16.0),
-                    child: AspectRatio(
-                      aspectRatio: 1,
-                      child: Container(
-                        padding: const EdgeInsets.all(6),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.4), // Board backdrop
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                        child: GridView.builder(
-                          physics: const NeverScrollableScrollPhysics(),
-                          gridDelegate:
-                              SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: n,
-                            crossAxisSpacing: 3,
-                            mainAxisSpacing: 3,
-                          ),
-                          itemCount: n * n,
-                          itemBuilder: (context, index) {
-                            int row = index ~/ n;
-                            int col = index % n;
-                            int regionId = currentLevelData.regions[row][col];
-                            int cellState = playerState[row][col];
-
-                            String cellContent = '';
-                            if (cellState == 1) cellContent = '🐫';
-                            if (cellState == 2) cellContent = '❌';
-
-                            return GestureDetector(
-                              onTap: () => _handleTap(row, col),
-                              child: Container(
-                                decoration: BoxDecoration(
-                                  // Use modulo operation just in case regions exceed colors length
-                                  color: regionColors[regionId % regionColors.length],
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(
-                                    color: Colors.black26,
-                                    width: 1.5,
-                                  ),
-                                ),
-                                child: Center(
-                                  child: Text(
-                                    cellContent,
-                                    style: const TextStyle(fontSize: 32),
-                                  ),
-                                ),
-                              ),
-                            );
-                          },
-                        ),
+            Expanded(
+              child: Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: AspectRatio(
+                    aspectRatio: 1,
+                    child: GridView.builder(
+                      physics: const NeverScrollableScrollPhysics(),
+                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: n,
+                        crossAxisSpacing: 3,
+                        mainAxisSpacing: 3,
                       ),
+                      itemCount: n * n,
+                      itemBuilder: (context, index) {
+                        int row = index ~/ n;
+                        int col = index % n;
+                        int regionId = currentLevelData.regions[row][col];
+                        int cellState = playerState[row][col];
+
+                        String cellContent = '';
+                        if (cellState == 1) cellContent = '🐫';
+                        if (cellState == 2) cellContent = '❌';
+
+                        return GestureDetector(
+                          onTap: () => _handleTap(row, col),
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: regionColors[regionId].withOpacity(0.85),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: Colors.black45,
+                                width: 1,
+                              ),
+                            ),
+                            child: Center(
+                              child: Text(
+                                cellContent,
+                                style: const TextStyle(fontSize: 32),
+                              ),
+                            ),
+                          ),
+                        );
+                      },
                     ),
                   ),
                 ),
               ),
+            ),
 
-              const SizedBox(height: 20),
-            ],
-          ),
+            const SizedBox(height: 20),
+          ],
         ),
       ),
     );
