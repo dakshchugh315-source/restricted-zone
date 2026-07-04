@@ -36,6 +36,7 @@ dependencies:
   cupertino_icons: ^1.0.8
   google_mobile_ads: ^9.0.0
   shared_preferences: ^2.5.5
+  audioplayers: ^6.7.1
 
 dev_dependencies:
   flutter_test:
@@ -61,6 +62,10 @@ flutter:
   assets:
     - assets/levels.json
     - assets/desert.jpg
+    - assets/camel.png
+    - assets/camel_sound.mp3
+    - assets/lose_heart.mp3
+    - assets/level_up.mp3
   # To add assets to your application, add an assets section, like this:
   # assets:
   #   - images/a_dot_burr.jpeg
