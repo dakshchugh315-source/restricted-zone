@@ -5,14 +5,18 @@ import 'package:google_mobile_ads/google_mobile_ads.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:audioplayers/audioplayers.dart';
 
+// Kis cheez ke liye ad dekh raha hai user, usko track karne ke liye
+enum RewardAction { oneLife, threeLives, threeHints }
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await MobileAds.instance.initialize();
-  runApp(const MeowdokuApp());
+  runApp(const CamelokuApp()); // Yahan naam badla
 }
 
-class MeowdokuApp extends StatelessWidget {
-  const MeowdokuApp({super.key});
+class CamelokuApp extends StatelessWidget {
+  // Yahan naam badla
+  const CamelokuApp({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -31,13 +35,11 @@ class GameLevel {
   final int size;
   final List<List<int>> regions;
   final List<List<bool>> solution;
-
   GameLevel(this.size, this.regions, this.solution);
 }
 
 class GameBoard extends StatefulWidget {
   const GameBoard({super.key});
-
   @override
   State<GameBoard> createState() => _GameBoardState();
 }
@@ -47,7 +49,11 @@ class _GameBoardState extends State<GameBoard> {
   bool gameOver = false;
   int currentLevelIndex = 0;
   bool isLoading = true;
+
   int diamonds = 0;
+  int hints = 3; // NAYA: Default 3 hints
+  int multiAdProgress = 0; // NAYA: 2 ad wale feature ke liye counter
+
   String tutorialMessage =
       "Welcome! 🐫 Tap any empty box to place your first camel.";
 
@@ -59,7 +65,6 @@ class _GameBoardState extends State<GameBoard> {
   RewardedAd? _rewardedAd;
   InterstitialAd? _interstitialAd;
 
-  // Teeno alag players taki sounds lag na karein
   final AudioPlayer _camelSoundPlayer = AudioPlayer();
   final AudioPlayer _loseHeartPlayer = AudioPlayer();
   final AudioPlayer _levelUpPlayer = AudioPlayer();
@@ -93,6 +98,7 @@ class _GameBoardState extends State<GameBoard> {
     setState(() {
       currentLevelIndex = prefs.getInt('saved_level') ?? 0;
       diamonds = prefs.getInt('saved_diamonds') ?? 0;
+      hints = prefs.getInt('saved_hints') ?? 3; // Hint save/load honge
     });
   }
 
@@ -100,11 +106,13 @@ class _GameBoardState extends State<GameBoard> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt('saved_level', currentLevelIndex);
     await prefs.setInt('saved_diamonds', diamonds);
+    await prefs.setInt('saved_hints', hints);
   }
 
+  // YAHAN APNE ASLI IDs DAAL LENA JAB PLAY STORE PE JAYE
   void _loadBannerAd() {
     _bannerAd = BannerAd(
-      adUnitId: 'ca-app-pub-1672105156409322/2483002147',
+      adUnitId: 'ca-app-pub-3940256099942544/6300978111',
       request: const AdRequest(),
       size: AdSize.banner,
       listener: BannerAdListener(
@@ -122,49 +130,133 @@ class _GameBoardState extends State<GameBoard> {
 
   void _loadRewardedAd() {
     RewardedAd.load(
-      adUnitId: 'ca-app-pub-1672105156409322/3796083817',
+      adUnitId: 'ca-app-pub-3940256099942544/5224354917',
       request: const AdRequest(),
       rewardedAdLoadCallback: RewardedAdLoadCallback(
         onAdLoaded: (ad) {
           _rewardedAd = ad;
         },
-        onAdFailedToLoad: (err) {},
+        onAdFailedToLoad: (err) {
+          _rewardedAd = null;
+        },
       ),
     );
   }
 
   void _loadInterstitialAd() {
     InterstitialAd.load(
-      adUnitId: 'ca-app-pub-1672105156409322/7910553250',
+      adUnitId: 'ca-app-pub-3940256099942544/1033173712',
       request: const AdRequest(),
       adLoadCallback: InterstitialAdLoadCallback(
         onAdLoaded: (ad) {
           _interstitialAd = ad;
         },
-        onAdFailedToLoad: (err) {},
+        onAdFailedToLoad: (err) {
+          _interstitialAd = null;
+        },
       ),
     );
   }
 
-  void _showRewardedAd() {
+  // --- NAYA LOGIC: HINTS AUR MULTI-REWARD ADS KA ---
+  void _giveReward(RewardAction action) {
+    setState(() {
+      if (action == RewardAction.oneLife) {
+        lives = 1;
+        gameOver = false;
+        multiAdProgress = 0;
+      } else if (action == RewardAction.threeLives) {
+        multiAdProgress++;
+        if (multiAdProgress >= 2) {
+          lives += 3;
+          gameOver = false;
+          multiAdProgress = 0; // Dono ads dekh liye
+        } else {
+          // Pehla ad dekh liya, ab dusre ka prompt do
+          Future.delayed(
+            const Duration(milliseconds: 500),
+            () => _showGameOverDialog(),
+          );
+        }
+      } else if (action == RewardAction.threeHints) {
+        hints += 3;
+        _saveGameData();
+      }
+    });
+  }
+
+  void _triggerRewardedAd(RewardAction action) {
     if (_rewardedAd != null) {
       _rewardedAd!.show(
         onUserEarnedReward: (ad, reward) {
-          setState(() {
-            lives = 1;
-            gameOver = false;
-          });
+          _giveReward(action);
         },
       );
       _rewardedAd = null;
       _loadRewardedAd();
     } else {
-      setState(() {
-        lives = 1;
-        gameOver = false;
-      });
+      // Fallback: Agar ad Google ki taraf se load nahi hua (Limited serving ki wajah se),
+      // toh player ko atakne na dein, direct reward de dein testing ke liye.
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Ad server busy. Free reward given! 🎁")),
+      );
+      _giveReward(action);
+      _loadRewardedAd();
     }
   }
+
+  void _useHint() {
+    if (gameOver || isLoading) return;
+
+    if (hints > 0) {
+      int n = levels[currentLevelIndex].size;
+      for (int r = 0; r < n; r++) {
+        for (int c = 0; c < n; c++) {
+          if (levels[currentLevelIndex].solution[r][c] &&
+              playerState[r][c] != 1) {
+            setState(() {
+              playerState[r][c] = 1; // Camel place kar diya
+              hints--;
+            });
+            _playCamelSound();
+            _saveGameData();
+            _checkWinCondition();
+            return;
+          }
+        }
+      }
+    } else {
+      // Hint khatam ho gaye, Ad dikhao
+      _showNeedHintsDialog();
+    }
+  }
+
+  void _showNeedHintsDialog() {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text(
+          "Out of Hints! 💡",
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+        content: const Text("Watch a quick ad to get 3 more hints?"),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("Cancel"),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _triggerRewardedAd(RewardAction.threeHints);
+            },
+            child: const Text("Watch Ad (+3 Hints)"),
+          ),
+        ],
+      ),
+    );
+  }
+  // ------------------------------------------------
 
   void _goToNextLevelWithAdCheck() {
     if ((currentLevelIndex + 1) % 3 == 0 && _interstitialAd != null) {
@@ -195,29 +287,25 @@ class _GameBoardState extends State<GameBoard> {
   }
 
   Future<void> _loadLevelsData() async {
-    try {
-      final String jsonString = await rootBundle.loadString(
-        'assets/levels.json',
-      );
-      final List<dynamic> jsonResponse = json.decode(jsonString);
-      setState(() {
-        levels = jsonResponse.map((level) {
-          return GameLevel(
-            level['size'] as int,
-            (level['regions'] as List)
-                .map((row) => List<int>.from(row))
-                .toList(),
-            (level['solution'] as List)
-                .map((row) => List<bool>.from(row))
-                .toList(),
-          );
-        }).toList();
-        isLoading = false;
-        _loadLevel();
-      });
-    } catch (e) {
-      print("Error loading JSON: $e");
-    }
+    final String jsonString = await rootBundle.loadString('assets/levels.json');
+    final List<dynamic> jsonResponse = json.decode(jsonString);
+    setState(() {
+      levels = jsonResponse
+          .map(
+            (level) => GameLevel(
+              level['size'] as int,
+              (level['regions'] as List)
+                  .map((row) => List<int>.from(row))
+                  .toList(),
+              (level['solution'] as List)
+                  .map((row) => List<bool>.from(row))
+                  .toList(),
+            ),
+          )
+          .toList();
+      isLoading = false;
+      _loadLevel();
+    });
   }
 
   void _loadLevel() {
@@ -227,10 +315,10 @@ class _GameBoardState extends State<GameBoard> {
       playerState = List.generate(n, (_) => List.filled(n, 0));
       lives = 3;
       gameOver = false;
-      if (currentLevelIndex == 0) {
+      multiAdProgress = 0; // Naye level par reset
+      if (currentLevelIndex == 0)
         tutorialMessage =
             "Welcome! 🐫 Tap any empty box to place your first camel.";
-      }
     });
   }
 
@@ -238,9 +326,7 @@ class _GameBoardState extends State<GameBoard> {
     int count = 0;
     for (int r = 0; r < playerState.length; r++) {
       for (int c = 0; c < playerState[r].length; c++) {
-        if (playerState[r][c] == 1) {
-          count++;
-        }
+        if (playerState[r][c] == 1) count++;
       }
     }
     return count;
@@ -281,13 +367,13 @@ class _GameBoardState extends State<GameBoard> {
 
           if (currentLevelIndex == 0) {
             int total = _countPlacedCamels();
-            if (total == 1) {
+            if (total == 1)
               tutorialMessage =
                   "Awesome! 🌟 Rule 1: Only ONE camel allowed per color region!";
-            } else if (total == 2) {
+            else if (total == 2)
               tutorialMessage =
                   "Great! 🛑 Rule 2: Camels CANNOT touch each other.";
-            } else if (total == 3) {
+            else if (total == 3) {
               tutorialMessage = "Perfect! Now the real game begins! 🚀";
               Future.delayed(const Duration(seconds: 2), () {
                 if (mounted) _goToNextLevelWithAdCheck();
@@ -305,11 +391,7 @@ class _GameBoardState extends State<GameBoard> {
             playerState[row][col] = 0;
             if (lives <= 0) {
               gameOver = true;
-              _showDialog(
-                "Game Over",
-                "The camels died of thirst! 🐪💀",
-                false,
-              );
+              _showGameOverDialog();
             }
           }
         }
@@ -327,81 +409,115 @@ class _GameBoardState extends State<GameBoard> {
         diamonds += 7;
       });
       _saveGameData();
-      _showDialog(
-        "Level Cleared! 🎉",
-        "You earned 7 💎!",
-        currentLevelIndex < levels.length - 1,
+
+      // Level win dialog
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => AlertDialog(
+          title: const Text(
+            "Level Cleared! 🎉",
+            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 22),
+          ),
+          content: const Text(
+            "You earned 7 💎!",
+            style: TextStyle(fontSize: 18),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context);
+                _goToNextLevelWithAdCheck();
+              },
+              child: const Text("Next Level", style: TextStyle(fontSize: 16)),
+            ),
+          ],
+        ),
       );
     }
   }
 
-  void _showDialog(String title, String message, bool hasNextLevel) {
+  void _showGameOverDialog() {
     showDialog(
       context: context,
       barrierDismissible: false,
       builder: (BuildContext context) {
         return AlertDialog(
-          title: Text(
-            title,
-            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 22),
+          title: const Text(
+            "Game Over",
+            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 22),
           ),
-          content: Text(message, style: const TextStyle(fontSize: 18)),
+          content: Text(
+            multiAdProgress == 1
+                ? "1 Ad watched! Watch one more to get 3 full lives. 🐪"
+                : "The camels died of thirst! 🐪💀",
+            style: const TextStyle(fontSize: 18),
+          ),
           actions: [
-            if (lives <= 0) ...[
-              TextButton(
-                onPressed: () {
-                  Navigator.pop(context);
-                  _loadLevel();
-                },
-                child: const Text("Restart", style: TextStyle(fontSize: 16)),
-              ),
-              ElevatedButton(
-                onPressed: () {
-                  Navigator.pop(context);
-                  _showRewardedAd();
-                },
-                child: const Text(
-                  "Watch Ad (+1 Life)",
-                  style: TextStyle(fontSize: 16),
-                ),
-              ),
-              if (diamonds >= 20)
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context);
+                _loadLevel();
+              },
+              child: const Text("Restart", style: TextStyle(fontSize: 16)),
+            ),
+
+            // Ad Buttons
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (multiAdProgress == 0)
+                  ElevatedButton(
+                    onPressed: () {
+                      Navigator.pop(context);
+                      _triggerRewardedAd(RewardAction.oneLife);
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.amber.shade200,
+                    ),
+                    child: const Text(
+                      "Watch 1 Ad (+1 Life)",
+                      style: TextStyle(fontSize: 16, color: Colors.black87),
+                    ),
+                  ),
+                const SizedBox(height: 8),
                 ElevatedButton(
                   onPressed: () {
                     Navigator.pop(context);
-                    setState(() {
-                      diamonds -= 20;
-                      lives = 1;
-                      gameOver = false;
-                    });
-                    _saveGameData();
+                    _triggerRewardedAd(RewardAction.threeLives);
                   },
-                  child: const Text(
-                    "Pay 20💎 for Life",
-                    style: TextStyle(fontSize: 16),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.green.shade300,
+                  ),
+                  child: Text(
+                    multiAdProgress == 1
+                        ? "Watch 2nd Ad (+3 Lives) ▶️"
+                        : "Watch 2 Ads (+3 Lives) 🎁",
+                    style: const TextStyle(fontSize: 16, color: Colors.black87),
                   ),
                 ),
-            ],
-            if (hasNextLevel && lives > 0)
-              TextButton(
-                onPressed: () {
-                  Navigator.pop(context);
-                  _goToNextLevelWithAdCheck();
-                },
-                child: const Text("Next Level", style: TextStyle(fontSize: 16)),
-              ),
-            if (!hasNextLevel && lives > 0)
-              TextButton(
-                onPressed: () {
-                  Navigator.pop(context);
-                  setState(() {
-                    currentLevelIndex = 0;
-                    _saveGameData();
-                    _loadLevel();
-                  });
-                },
-                child: const Text("Play Again", style: TextStyle(fontSize: 16)),
-              ),
+                const SizedBox(height: 8),
+                if (diamonds >= 20)
+                  ElevatedButton(
+                    onPressed: () {
+                      Navigator.pop(context);
+                      setState(() {
+                        diamonds -= 20;
+                        lives = 1;
+                        gameOver = false;
+                      });
+                      _saveGameData();
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.blue.shade200,
+                    ),
+                    child: const Text(
+                      "Pay 20💎 for Life",
+                      style: TextStyle(fontSize: 16, color: Colors.black87),
+                    ),
+                  ),
+              ],
+            ),
           ],
         );
       },
@@ -429,9 +545,8 @@ class _GameBoardState extends State<GameBoard> {
 
   @override
   Widget build(BuildContext context) {
-    if (isLoading) {
+    if (isLoading)
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    }
     int n = levels[currentLevelIndex].size;
 
     return Container(
@@ -450,6 +565,20 @@ class _GameBoardState extends State<GameBoard> {
           ),
           centerTitle: true,
           actions: [
+            // NAYA: Hint Button AppBar mein
+            TextButton.icon(
+              onPressed: _useHint,
+              icon: const Icon(Icons.lightbulb, color: Colors.white, size: 28),
+              label: Text(
+                '$hints',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
             Center(
               child: Text(
                 '💎 $diamonds   ',
