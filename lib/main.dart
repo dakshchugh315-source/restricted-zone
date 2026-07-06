@@ -4,9 +4,10 @@ import 'dart:ui';
 import 'package:flutter/services.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:audioplayers/audioplayers.dart'; // <-- NAYA IMPORT
 
-// Ad actions ko track karne ke liye enum
-enum RewardAction { oneLife, threeLives }
+// Enum ko replace kar de isse:
+enum RewardAction { oneLife, threeLives, threeHints }
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -49,7 +50,7 @@ class _GameBoardState extends State<GameBoard> {
   int currentLevelIndex = 0;
   bool isLoading = true;
   int diamonds = 0;
-  
+  int hints = 3;
   // Multi-ad feature progress track karne ke liye
   int multiAdProgress = 0; 
 
@@ -57,13 +58,15 @@ class _GameBoardState extends State<GameBoard> {
   late List<List<int>> playerState;
 
   BannerAd? _bannerAd;
+  final AudioPlayer _camelSoundPlayer = AudioPlayer();
+  final AudioPlayer _loseHeartPlayer = AudioPlayer();
+  final AudioPlayer _levelUpPlayer = AudioPlayer();
   bool _isBannerAdLoaded = false;
   RewardedAd? _rewardedAd;
   InterstitialAd? _interstitialAd;
 
   String tutorialMessage =
       "Welcome! 🐫 Tap any empty box to place your first camel.";
-
   int tutorialStep = 0; 
   Set<String> highlightedCells = {};
 
@@ -91,11 +94,56 @@ class _GameBoardState extends State<GameBoard> {
     _loadInterstitialAd();
   }
 
+  void _useHint() {
+    if (gameOver || isLoading) return;
+
+    if (hints > 0) {
+      int n = levels[currentLevelIndex].size;
+      for (int r = 0; r < n; r++) {
+        for (int c = 0; c < n; c++) {
+          if (levels[currentLevelIndex].solution[r][c] && playerState[r][c] != 1) {
+            setState(() {
+              playerState[r][c] = 1; // Camel place kar diya
+              hints--;
+            });
+            _playCamelSound();
+            _saveGameData();
+            _checkWinCondition();
+            return;
+          }
+        }
+      }
+    } else {
+      _showNeedHintsDialog();
+    }
+  }
+
+  void _showNeedHintsDialog() {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text("Out of Hints! 💡", style: TextStyle(fontWeight: FontWeight.bold)),
+        content: const Text("Watch a quick ad to get 3 more hints?"),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancel")),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _triggerRewardedAd(RewardAction.threeHints);
+            },
+            child: const Text("Watch Ad (+3 Hints)"),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _loadGameData() async {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
       currentLevelIndex = prefs.getInt('saved_level') ?? 0;
       diamonds = prefs.getInt('saved_diamonds') ?? 0;
+      hints = prefs.getInt('saved_hints') ?? 3;
     });
   }
 
@@ -103,6 +151,7 @@ class _GameBoardState extends State<GameBoard> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt('saved_level', currentLevelIndex);
     await prefs.setInt('saved_diamonds', diamonds);
+    await prefs.setInt('saved_hints', hints);
   }
 
   void _loadBannerAd() {
@@ -161,7 +210,10 @@ class _GameBoardState extends State<GameBoard> {
               lives = 1;
             } else if (action == RewardAction.threeLives) {
               lives = 3;
-            }
+            } else if (action == RewardAction.threeHints) { 
+              hints += 3;
+              _saveGameData();
+            } 
             gameOver = false;
           });
         },
@@ -211,6 +263,9 @@ class _GameBoardState extends State<GameBoard> {
     _bannerAd?.dispose();
     _rewardedAd?.dispose();
     _interstitialAd?.dispose();
+    _camelSoundPlayer.dispose(); // <-- YAHAN SE ADD
+    _loseHeartPlayer.dispose();
+    _levelUpPlayer.dispose();
     super.dispose();
   }
 
@@ -268,13 +323,16 @@ class _GameBoardState extends State<GameBoard> {
     return count;
   }
 
-  // Dummy audio functions to prevent compilation errors
-  void _playCamelSound() {
-    // Add audio package logic here
+  void _playCamelSound() async {
+    await _camelSoundPlayer.play(AssetSource('camel_sound.mp3'));
   }
 
-  void _playLoseHeartSound() {
-    // Add audio package logic here
+  void _playLoseHeartSound() async {
+    await _loseHeartPlayer.play(AssetSource('lose_heart.mp3'));
+  }
+
+  void _playLevelUpSound() async {
+    await _levelUpPlayer.play(AssetSource('level_up.mp3'));
   }
 
   void _highlightRowAndCol(int r, int c) {
@@ -423,6 +481,7 @@ class _GameBoardState extends State<GameBoard> {
 
     if (camelsPlaced == n) {
       gameOver = true;
+      _playLevelUpSound();
       setState(() {
         diamonds += 7;
       });
@@ -464,10 +523,32 @@ class _GameBoardState extends State<GameBoard> {
       barrierDismissible: false,
       builder: (BuildContext context) {
         return AlertDialog(
-          title: const Text("You Win! 🏆", style: TextStyle(fontWeight: FontWeight.bold)),
-          content: const Text("You beat all levels and earned 7 💎! 🐫👑", style: TextStyle(fontSize: 16)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: const Center(
+            child: Text("Oasis Reached! 🌴🏆", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 24))
+          ),
+          content: const Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text("Incredible! You've mastered the desert and completed all levels! 🐫👑", 
+                textAlign: TextAlign.center, 
+                style: TextStyle(fontSize: 16)
+              ),
+              SizedBox(height: 12),
+              Text("Reward: 7 💎 added!", 
+                textAlign: TextAlign.center, 
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.blue)
+              ),
+            ],
+          ),
+          actionsAlignment: MainAxisAlignment.center,
           actions: [
-            TextButton(
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.amber,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 12)
+              ),
               onPressed: () {
                 Navigator.of(context).pop();
                 setState(() {
@@ -476,7 +557,7 @@ class _GameBoardState extends State<GameBoard> {
                   _loadLevel();
                 });
               },
-              child: const Text("Play Again"),
+              child: const Text("Play Again 🔄", style: TextStyle(fontSize: 18, color: Colors.black87, fontWeight: FontWeight.bold)),
             ),
           ],
         );
@@ -581,12 +662,15 @@ class _GameBoardState extends State<GameBoard> {
 
                   const SizedBox(height: 20),
 
-                  TextButton(
+                  // Puraana TextButton delete kar ke ye daal de:
+                  _buildGlossyButton(
+                    text: "RESTART LEVEL 🔄",
+                    icon: Icons.refresh,
+                    color: Colors.grey.shade600,
                     onPressed: () {
                       Navigator.pop(context);
                       _loadLevel();
-                    },
-                    child: const Text("Restart Level", style: TextStyle(fontSize: 18, color: Colors.grey, decoration: TextDecoration.underline)),
+                    }
                   ),
                 ],
               ),
@@ -685,6 +769,15 @@ class _GameBoardState extends State<GameBoard> {
           backgroundColor: Colors.amber.shade400.withOpacity(0.85),
           elevation: 0,
           actions: [
+            // <-- HINT BUTTON YAHAN AAYEGA
+            TextButton.icon(
+              onPressed: _useHint,
+              icon: const Icon(Icons.lightbulb, color: Colors.white, size: 28),
+              label: Text(
+                '$hints',
+                style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
+              ),
+            ),
             Center(
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 8.0),
